@@ -92,7 +92,7 @@ export default function RegisterPage() {
 
     try {
       // 1. Create user account
-      const { error: signUpError } = await signUp(
+      const { error: signUpError, session: signUpSession, user: signUpUser } = await signUp(
         formData.email, 
         formData.password, 
         formData.name
@@ -109,10 +109,21 @@ export default function RegisterPage() {
       }
 
       // 2. Get the new user session
-      const { data: { session } } = await supabase.auth.getSession();
+      // Try to use session from signUp response first, otherwise get it
+      let session = signUpSession;
+      let user = signUpUser;
       
-      if (!session?.user) {
-        toast.error("Erro ao obter sessão. Faça login novamente.");
+      if (!session || !user) {
+        // If session is not immediately available, wait a bit and try again
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const { data: { session: fetchedSession } } = await supabase.auth.getSession();
+        session = fetchedSession;
+        user = fetchedSession?.user ?? null;
+      }
+      
+      if (!session || !user) {
+        // If email confirmation is required, inform the user
+        toast.success("Conta criada com sucesso! Verifique seu e-mail para confirmar antes de fazer login.");
         navigate("/login");
         return;
       }
@@ -132,6 +143,33 @@ export default function RegisterPage() {
 
       if (tenantError) {
         console.error("Tenant creation error:", tenantError);
+        // If tenant creation fails due to permissions (email not confirmed), 
+        // save tenant data temporarily and inform user to confirm email first
+        const errorMessage = tenantError.message?.toLowerCase() || "";
+        const errorCode = tenantError.code || "";
+        
+        if (
+          errorMessage.includes("permission") || 
+          errorMessage.includes("policy") || 
+          errorMessage.includes("row-level security") ||
+          errorCode === "42501" ||
+          errorCode === "PGRST301"
+        ) {
+          // Save tenant data to complete setup after email confirmation
+          const pendingTenantData = {
+            name: formData.businessName,
+            slug: slug,
+            phone: formData.phone || null,
+            whatsapp: formData.phone || null,
+            userName: formData.name,
+            userPhone: formData.phone || null,
+          };
+          localStorage.setItem("pendingTenantSetup", JSON.stringify(pendingTenantData));
+          
+          toast.success("Conta criada! Verifique seu e-mail para confirmar. Você poderá completar a configuração após confirmar.");
+          navigate("/login");
+          return;
+        }
         toast.error("Erro ao criar barbearia. Tente novamente.");
         setIsLoading(false);
         return;
@@ -145,7 +183,7 @@ export default function RegisterPage() {
           full_name: formData.name,
           phone: formData.phone || null,
         })
-        .eq("id", session.user.id);
+        .eq("id", user.id);
 
       if (profileError) {
         console.error("Profile update error:", profileError);
@@ -155,7 +193,7 @@ export default function RegisterPage() {
       const { error: roleError } = await supabase
         .from("user_roles")
         .insert({
-          user_id: session.user.id,
+          user_id: user.id,
           tenant_id: tenant.id,
           role: "owner",
         });

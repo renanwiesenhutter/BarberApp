@@ -56,6 +56,73 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     async function fetchUserData() {
       if (!user) return;
       
+      // Check if there's pending tenant setup data
+      const pendingTenantData = localStorage.getItem("pendingTenantSetup");
+      
+      if (pendingTenantData) {
+        try {
+          const tenantData = JSON.parse(pendingTenantData);
+          
+          // Try to create the tenant now that user is authenticated
+          const { data: tenant, error: tenantError } = await supabase
+            .from("tenants")
+            .insert({
+              name: tenantData.name,
+              slug: tenantData.slug,
+              phone: tenantData.phone,
+              whatsapp: tenantData.whatsapp,
+            })
+            .select()
+            .single();
+          
+          if (!tenantError && tenant) {
+            // Update user profile with tenant_id
+            await supabase
+              .from("profiles")
+              .update({ 
+                tenant_id: tenant.id,
+                full_name: tenantData.userName,
+                phone: tenantData.userPhone,
+              })
+              .eq("id", user.id);
+            
+            // Assign owner role
+            await supabase
+              .from("user_roles")
+              .insert({
+                user_id: user.id,
+                tenant_id: tenant.id,
+                role: "owner",
+              });
+            
+            // Create default tenant settings
+            await supabase
+              .from("tenant_settings")
+              .insert({
+                tenant_id: tenant.id,
+                monday_open: "09:00",
+                monday_close: "19:00",
+                tuesday_open: "09:00",
+                tuesday_close: "19:00",
+                wednesday_open: "09:00",
+                wednesday_close: "19:00",
+                thursday_open: "09:00",
+                thursday_close: "19:00",
+                friday_open: "09:00",
+                friday_close: "19:00",
+                saturday_open: "09:00",
+                saturday_close: "17:00",
+              });
+            
+            // Remove pending data
+            localStorage.removeItem("pendingTenantSetup");
+            toast.success("Configuração da barbearia concluída com sucesso!");
+          }
+        } catch (error) {
+          console.error("Error completing tenant setup:", error);
+        }
+      }
+      
       const { data: profile } = await supabase
         .from("profiles")
         .select("full_name, tenant_id")
